@@ -1,5 +1,6 @@
 import checkFileExists from '@libs/fileDownload/checkFileExists';
 import {readFileAsync} from '@libs/fileDownload/FileUtils';
+import Log from '@libs/Log';
 import ReceiptStorage from '@libs/ReceiptStorage';
 import {logReceiptDropped} from '@libs/telemetry/ReceiptObservability';
 import validateFormDataParameter from '@libs/validateFormDataParameter';
@@ -62,14 +63,32 @@ const prepareRequestPayload: PrepareRequestPayload = (command, data, initiatedOf
                 }
                 // Use the actual file name if available, otherwise fall back to extracting from path/uri
                 const fileName = name || (path ? (path.split('/').pop() ?? '') : '') || '';
-                return readFileAsync(source, fileName, () => {}, undefined, type).then((file) => {
-                    if (!file) {
-                        return;
-                    }
+                // Preserve a readable original source, including legacy filenames with literal percent signs.
+                return readFileAsync(source, fileName, () => {}, undefined, type)
+                    .then((file) => {
+                        if (file) {
+                            return file;
+                        }
 
-                    validateFormDataParameter(command, key, file);
-                    formData.append(key, file);
-                });
+                        const resolvedSource = ReceiptStorage.resolve(source);
+                        if (!resolvedSource?.startsWith('file://') || resolvedSource === source) {
+                            return undefined;
+                        }
+
+                        // The resolver returns a decoded filename; encode it before fetch interprets it as a URI.
+                        const encodedPath = resolvedSource.slice('file://'.length).split('/').map(encodeURIComponent).join('/');
+                        const localUri = `file://${encodedPath}`;
+                        return localUri === source ? undefined : readFileAsync(localUri, fileName, () => {}, undefined, type);
+                    })
+                    .then((file) => {
+                        if (!file) {
+                            Log.alert('[Attachment] Failed to read offline file during payload preparation', {command});
+                            return;
+                        }
+
+                        validateFormDataParameter(command, key, file);
+                        formData.append(key, file);
+                    });
             }
 
             validateFormDataParameter(command, key, value);

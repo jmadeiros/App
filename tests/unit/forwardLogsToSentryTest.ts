@@ -14,6 +14,35 @@ describe('forwardLogsToSentry', () => {
         jest.clearAllMocks();
     });
 
+    it('forwards an offline attachment read failure without file metadata or message contents', () => {
+        const message = '[alrt] [Attachment] Failed to read offline file during payload preparation';
+        forwardLogsToSentry(
+            packetWith(message, {
+                command: 'AddTextAndAttachment',
+                source: 'file:///private/photo.jpg',
+                fileName: 'photo.jpg',
+                reportComment: 'Private comment',
+                receiptTraceId: 'receipt-only-id',
+            }),
+        );
+
+        expect(Sentry.logger.error).toHaveBeenCalledWith(message, {command: 'AddTextAndAttachment'});
+        expect(Sentry.addBreadcrumb).toHaveBeenCalledWith({
+            category: 'attachment',
+            type: 'info',
+            level: 'error',
+            message,
+            data: {command: 'AddTextAndAttachment'},
+        });
+    });
+
+    it('does not forward attachment cache warnings carrying raw filesystem errors', () => {
+        forwardLogsToSentry(packetWith('[warn] [AttachmentCache] Failed to cache attachment', {error: 'ENOENT /private/photo.jpg'}));
+
+        expect(Sentry.logger.warn).not.toHaveBeenCalled();
+        expect(Sentry.addBreadcrumb).not.toHaveBeenCalled();
+    });
+
     it('adds a breadcrumb carrying the receipt trail so a crash report shows it, with only whitelisted params', () => {
         // Given a forwarded [Receipt] log line carrying opaque ids alongside non-whitelisted file metadata
         const packet = packetWith('[info] [Receipt] enqueued', {
